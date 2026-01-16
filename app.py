@@ -1,0 +1,251 @@
+import dash
+from dash import dcc, html, Input, Output
+import dash_bootstrap_components as dbc
+import plotly.graph_objs as go
+import plotly.express as px
+import pandas as pd
+import os
+
+# ==========================================
+# 1. DATA LOADING & PREPARATION
+# ==========================================
+
+# NOTE: When uploading to GitHub, ensure these two CSV files 
+# are in the SAME folder as this script.
+FILE_MAIN = 'crop_production.csv'
+FILE_COST = 'datafile (1).csv'
+
+def load_data():
+    try:
+        # Try loading real data from the current directory
+        df_main = pd.read_csv(FILE_MAIN)
+        df_cost = pd.read_csv(FILE_COST)
+        print("CSV Files Loaded Successfully.")
+    except FileNotFoundError:
+        print("CSV not found. Generating Mock Data for demonstration...")
+        # Mock Data for Production (Fail-safe)
+        data_prod = {
+            'State_Name': ['Punjab', 'Uttar Pradesh', 'Andhra Pradesh', 'Bihar', 'Assam'] * 20,
+            'Crop_Year': sorted([2010, 2011, 2012, 2013, 2014] * 20),
+            'Crop': ['Wheat', 'Rice', 'Maize', 'Sugarcane', 'Cotton'] * 20,
+            'Area': [x * 100 for x in range(1, 101)],
+            'Production': [x * 500 for x in range(1, 101)]
+        }
+        df_main = pd.DataFrame(data_prod)
+        
+        # Mock Data for Costs (Fail-safe)
+        data_cost = {
+            'Crop': ['Wheat', 'Rice', 'Maize', 'Bajra', 'Jowar'],
+            'Cost of Cultivation (`/Hectare) A2+FL': [15000, 18000, 12000, 10000, 11000],
+            'Cost of Production (`/Quintal) C2': [1200, 1400, 1100, 900, 950],
+            'Yield (Quintal/ Hectare) ': [45, 50, 30, 20, 25],
+            'State': ['Punjab', 'Andhra Pradesh', 'Bihar', 'Rajasthan', 'Maharashtra'] 
+        }
+        df_cost = pd.DataFrame(data_cost)
+
+    # Pre-processing
+    # Group by State to avoid duplicate entries when sorting
+    state_prod = df_main.groupby('State_Name')[['Area', 'Production']].sum().reset_index()
+    state_prod['Yield_Per_Unit'] = state_prod['Production'] / state_prod['Area']
+    state_prod = state_prod.sort_values(by='Yield_Per_Unit', ascending=False)
+    
+    return df_main, df_cost, state_prod
+
+# Load the data
+df, df_cost, df_state_prod = load_data()
+
+# ==========================================
+# 2. APP INITIALIZATION (Dark Theme)
+# ==========================================
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
+
+# Expose server for deployment (Required for Render/Gunicorn)
+server = app.server
+
+# ==========================================
+# 3. LAYOUT DEFINITION
+# ==========================================
+app.layout = dbc.Container([
+    
+    # --- Header ---
+    dbc.Row([
+        dbc.Col(html.H1("🇮🇳 Crop Production in India", className="text-center text-primary mb-4"), width=12)
+    ], className="mt-4"),
+
+    # --- Controls (Dropdowns) ---
+    dbc.Row([
+        dbc.Col([
+            html.Label("Select State for Analysis:"),
+            dcc.Dropdown(
+                id='state-dropdown',
+                options=[{'label': i, 'value': i} for i in df['State_Name'].unique()],
+                value=df['State_Name'].unique()[0],
+                clearable=False,
+                className="text-dark" # Text dark so it's readable
+            )
+        ], width=6),
+        dbc.Col([
+            html.Label("Select Metric:"),
+            dcc.Dropdown(
+                id='metric-dropdown',
+                options=[
+                    {'label': 'Production', 'value': 'Production'},
+                    {'label': 'Area', 'value': 'Area'}
+                ],
+                value='Production',
+                clearable=False,
+                className="text-dark"
+            )
+        ], width=6),
+    ], className="mb-4"),
+
+    # --- Tabs System ---
+    dbc.Tabs([
+        # --- TAB 1: OVERVIEW ---
+        dbc.Tab(label='Overview & Trends', children=[
+            dbc.Row([
+                # Pie Chart
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Crop Distribution Share"),
+                        dbc.CardBody(dcc.Graph(id='pie-chart'))
+                    ], color="secondary", inverse=True)
+                ], width=6),
+                
+                # Bar Chart (Time Series)
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Yearly Production Trends"),
+                        dbc.CardBody(dcc.Graph(id='trend-bar-chart'))
+                    ], color="secondary", inverse=True)
+                ], width=6),
+            ], className="mt-3"),
+            
+            dbc.Row([
+                dbc.Col([
+                     dbc.Card([
+                        dbc.CardHeader("3D Analysis (Year vs Area vs Production)"),
+                        dbc.CardBody(dcc.Graph(id='3d-scatter'))
+                    ], color="secondary", inverse=True)
+                ], width=12)
+            ], className="mt-3")
+        ]),
+
+        # --- TAB 2: ECONOMIC ANALYSIS ---
+        dbc.Tab(label='Cost & Yield Analysis', children=[
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Cost of Cultivation vs Yield"),
+                        dbc.CardBody(dcc.Graph(id='cost-stack-chart'))
+                    ], color="secondary", inverse=True)
+                ], width=12)
+            ], className="mt-3")
+        ]),
+
+        # --- TAB 3: STATE COMPARISON ---
+        dbc.Tab(label='State Comparison', children=[
+             dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Yield Comparison: Key Crops"),
+                        dbc.CardBody(dcc.Graph(id='multi-scatter-chart'))
+                    ], color="secondary", inverse=True)
+                ], width=12)
+            ], className="mt-3"),
+             
+             dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("State-wise Productivity Ranking"),
+                        dbc.CardBody(dcc.Graph(id='productivity-bar'))
+                    ], color="secondary", inverse=True)
+                ], width=12)
+            ], className="mt-3")
+        ])
+    ])
+
+], fluid=True)
+
+# ==========================================
+# 4. CALLBACKS (INTERACTIVITY)
+# ==========================================
+
+@app.callback(
+    [Output('pie-chart', 'figure'),
+     Output('trend-bar-chart', 'figure'),
+     Output('3d-scatter', 'figure'),
+     Output('cost-stack-chart', 'figure'),
+     Output('multi-scatter-chart', 'figure'),
+     Output('productivity-bar', 'figure')],
+    [Input('state-dropdown', 'value'),
+     Input('metric-dropdown', 'value')]
+)
+def update_dashboard(selected_state, selected_metric):
+    
+    # Filter Data based on State
+    filtered_df = df[df['State_Name'] == selected_state]
+    
+    # --- FIG 1: Pie Chart ---
+    top_crops = filtered_df.groupby('Crop')['Area'].sum().nlargest(10).reset_index()
+    fig1 = px.pie(top_crops, values='Area', names='Crop', hole=0.3, template="plotly_dark")
+    fig1.update_traces(textposition='inside', textinfo='percent+label')
+    fig1.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+
+    # --- FIG 2: Bar Chart (Trend) ---
+    yearly_data = filtered_df.groupby('Crop_Year')[selected_metric].sum().reset_index()
+    fig2 = px.bar(yearly_data, x='Crop_Year', y=selected_metric, 
+                  color=selected_metric, template="plotly_dark",
+                  color_continuous_scale='Viridis')
+    
+    # --- FIG 3: 3D Scatter ---
+    sample_df = df.head(500) 
+    fig3 = px.scatter_3d(sample_df, x='Crop_Year', y='Area', z='Production',
+                         color='Crop', size_max=10, opacity=0.7, template="plotly_dark")
+    fig3.update_layout(margin=dict(l=0, r=0, b=0, t=0))
+
+    # --- FIG 4: Stacked Bar (Cost Analysis) ---
+    trace1 = go.Bar(x=df_cost['Crop'], y=df_cost['Cost of Cultivation (`/Hectare) A2+FL'], 
+                    name='Cost (A2+FL)', marker=dict(color='#FFD700'))
+    trace2 = go.Bar(x=df_cost['Crop'], y=df_cost['Cost of Production (`/Quintal) C2'], 
+                    name='Cost (C2)', marker=dict(color='#C0C0C0'))
+    trace3 = go.Bar(x=df_cost['Crop'], y=df_cost['Yield (Quintal/ Hectare) '], 
+                    name='Yield', marker=dict(color='#CD7F32'))
+    
+    layout_stack = go.Layout(barmode='group', template="plotly_dark", 
+                             xaxis={'title': 'Crops'}, yaxis={'title': 'Value'})
+    fig4 = go.Figure(data=[trace1, trace2, trace3], layout=layout_stack)
+
+    # --- FIG 5: Multi-Scatter ---
+    crops_to_plot = ['Wheat', 'Rice', 'Maize']
+    colors = ['#33cc99', 'red', 'blue']
+    data_traces = []
+    
+    for i, crop in enumerate(crops_to_plot):
+        crop_data = df_cost[df_cost['Crop'] == crop]
+        if not crop_data.empty:
+            trace = go.Scatter(
+                x=crop_data['Yield (Quintal/ Hectare) '],
+                y=crop_data['State'], 
+                mode='lines+markers',
+                name=crop,
+                marker=dict(size=12, color=colors[i], symbol='pentagon', line={'width': 2})
+            )
+            data_traces.append(trace)
+            
+    fig5 = go.Figure(data=data_traces)
+    fig5.update_layout(title="Yield vs State Comparison", 
+                       xaxis={'title': 'Yield'}, template="plotly_dark")
+
+    # --- FIG 6: Productivity Ranking ---
+    top_states = df_state_prod.head(15)
+    fig6 = px.bar(top_states, x='State_Name', y='Yield_Per_Unit', 
+                  color='Yield_Per_Unit', template="plotly_dark", title="Production per Unit Area")
+
+    return fig1, fig2, fig3, fig4, fig5, fig6
+
+# ==========================================
+# 5. RUN SERVER (Standard for Deployment)
+# ==========================================
+if __name__ == '__main__':
+    app.run_server(debug=True)
